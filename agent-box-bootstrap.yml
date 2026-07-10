@@ -16,6 +16,7 @@
     bootstrap_admin_home: "/home/{{ bootstrap_admin_user }}"
     agent_user: agent
     agent_home: "/home/{{ agent_user }}"
+    agent_runtime_dir: "/run/user/{{ lookup('ansible.builtin.pipe', 'id -u ' ~ agent_user) }}"
     private_dotfiles_repo: https://github.com/therealpaulgg/dotfiles.git
     private_dotfiles_source: "{{ bootstrap_admin_home }}/.local/share/chezmoi"
     agent_dotfiles_source: "{{ agent_home }}/.local/share/chezmoi"
@@ -543,6 +544,8 @@
       environment:
         HOME: "{{ agent_home }}"
         PATH: "{{ agent_home }}/.local/bin:{{ agent_home }}/.bun/bin:{{ ansible_env.PATH }}"
+        XDG_RUNTIME_DIR: "{{ agent_runtime_dir }}"
+        DBUS_SESSION_BUS_ADDRESS: "unix:path={{ agent_runtime_dir }}/bus"
       changed_when: false
       loop:
         - pi --version
