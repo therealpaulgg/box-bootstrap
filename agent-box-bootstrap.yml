@@ -81,7 +81,7 @@
     - name: Install the pinned Chezmoi release
       become: true
       ansible.builtin.shell: >-
-        sh -c "$(curl -fsLS get.chezmoi.io)" -- -b /usr/local/bin -v {{ chezmoi_version }}
+        sh -c "$(curl -fsLS get.chezmoi.io)" -- -b /usr/local/bin -t {{ chezmoi_version }}
       args:
         creates: /usr/local/bin/chezmoi
         executable: /bin/bash
