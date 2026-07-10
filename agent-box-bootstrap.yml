@@ -196,6 +196,13 @@
         github_token_secret_key: "{{ github_token_secret_key_prompt.user_input }}"
       when: github_token_secret_key | length == 0
 
+    - name: Require a BWS secret key rather than a secret value
+      ansible.builtin.assert:
+        that: "github_token_secret_key is match('^[A-Za-z_][A-Za-z0-9_]*$')"
+        fail_msg: >-
+          Enter the BWS secret key/name (for example,
+          GH_AGENT_SANDBOX_TOKEN_THEREALPAULGG), never a token value.
+
     - name: Prompt for the Bitwarden gateway item on the initial run
       ansible.builtin.pause:
         prompt: Bitwarden item name containing work MCP gateway fields
