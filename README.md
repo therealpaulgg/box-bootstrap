@@ -126,6 +126,51 @@ ansible-playbook -i localhost, -c local agent-box-bootstrap.yml \
   --ask-become-pass -e install_globalprotect=false
 ```
 
+## Refresh the agent Chezmoi profile
+
+Run this **from an `azureuser` login**, never from an `agent` shell. The `agent`
+account is intentionally non-sudo; running `sudo` after switching to that user
+will prompt for an unusable agent password.
+
+The agent owns a separate source checkout at
+`/home/agent/.local/share/chezmoi`. First refresh that checkout using its
+BWS-backed Git credential, then use `azureuser`'s temporary Bitwarden session
+to render the agent profile:
+
+```sh
+# Optional but normally desired: fetch the current private dotfiles source.
+sudo -u agent git -C /home/agent/.local/share/chezmoi pull --ff-only
+
+# Bitwarden unlock is needed only while templates are rendered; it is not saved.
+export BW_SESSION="$(bw unlock --raw)"
+
+# Preview the result before changing the agent home directory.
+sudo env \
+  BITWARDENCLI_APPDATA_DIR="$HOME/.config/Bitwarden CLI" \
+  BW_SESSION="$BW_SESSION" \
+  chezmoi \
+    --config /home/agent/.config/chezmoi/chezmoi.toml \
+    --destination /home/agent \
+    diff
+
+# Apply after reviewing the diff. Do not add --force for normal refreshes.
+sudo env \
+  BITWARDENCLI_APPDATA_DIR="$HOME/.config/Bitwarden CLI" \
+  BW_SESSION="$BW_SESSION" \
+  chezmoi \
+    --config /home/agent/.config/chezmoi/chezmoi.toml \
+    --destination /home/agent \
+    apply
+
+# Root rendered the destination, so return all resulting files to agent.
+sudo chown -R agent:agent /home/agent
+unset BW_SESSION
+```
+
+This deliberately uses `azureuser`'s Bitwarden CLI application data only for
+template rendering. It does not copy a Bitwarden session or login database to
+`agent`; that account continues to retrieve durable secrets through BWS.
+
 ## Non-goals
 
 - Provisioning ordinary personal/work machines.
