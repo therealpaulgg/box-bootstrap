@@ -20,7 +20,7 @@
     private_dotfiles_repo: https://github.com/therealpaulgg/dotfiles.git
     private_dotfiles_source: "{{ bootstrap_admin_home }}/.local/share/chezmoi"
     agent_dotfiles_source: "{{ agent_home }}/.local/share/chezmoi"
-    install_globalprotect: false
+    install_globalprotect: true
     configure_tailscale: true
     tailscale_hostname: agent-box
     chezmoi_version: v2.71.0

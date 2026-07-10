@@ -111,22 +111,19 @@ loopback-only gateway on tailnet HTTPS port `443` and noVNC on `8443`.
 
 ## GlobalProtect
 
-GlobalProtect is deliberately disabled by default:
+GlobalProtect is installed by default from the pinned vendor archive in the
+private dotfiles source. The bootstrap configures the client, the dedicated
+`azureuser` Google Chrome SAML browser, and its XDG callback handlers.
 
-```text
-install_globalprotect=false
-```
+The first Okta/MFA sign-in remains interactive. Complete it through the noVNC
+desktop; do not copy `~/.GlobalProtect`, browser profiles, OAuth state, or
+cached credentials from another VM.
 
-The first Linux SAML login is not yet a proven automated/headless path. Do not
-copy `~/.GlobalProtect`, browser profiles, OAuth state, or cached credentials
-from an existing VM.
-
-After its first-login path has been separately validated, install the pinned
-client without automating the login itself:
+To omit GlobalProtect for a disposable bootstrap run:
 
 ```sh
 ansible-playbook -i localhost, -c local agent-box-bootstrap.yml \
-  --ask-become-pass -e install_globalprotect=true
+  --ask-become-pass -e install_globalprotect=false
 ```
 
 ## Non-goals
