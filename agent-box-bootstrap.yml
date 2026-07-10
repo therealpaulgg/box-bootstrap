@@ -95,6 +95,35 @@
         creates: /usr/local/bin/bws
         executable: /bin/bash
 
+    - name: Install Tailscale before private source provisioning
+      become: true
+      ansible.builtin.shell: curl -fsSL https://tailscale.com/install.sh | sh
+      args:
+        creates: /usr/bin/tailscale
+        executable: /bin/bash
+      when: configure_tailscale | bool
+
+    - name: Enable the Tailscale daemon before enrollment
+      become: true
+      ansible.builtin.systemd_service:
+        name: tailscaled.service
+        enabled: true
+        state: started
+      when: configure_tailscale | bool
+
+    - name: Pause for interactive Tailscale enrollment
+      ansible.builtin.pause:
+        prompt: >-
+          In a second initial-access terminal, run `sudo tailscale up --hostname={{ tailscale_hostname }}`
+          and complete browser authentication. Press Enter only after `tailscale status`
+          shows this VM in the expected tailnet.
+      when: configure_tailscale | bool
+
+    - name: Verify Tailscale enrollment
+      ansible.builtin.command: tailscale status
+      changed_when: false
+      when: configure_tailscale | bool
+
     - name: Create azureuser BWS token directory
       ansible.builtin.file:
         path: "{{ bootstrap_admin_home }}/.config/bws"
@@ -364,22 +393,6 @@
           - start_agent_runtime=true
       args:
         chdir: "{{ private_dotfiles_source }}/dot_local/share/chezmoi-ansible"
-
-    - name: Install and start Tailscale
-      become: true
-      ansible.builtin.command:
-        argv: [ansible-playbook, -i, 'localhost,', -c, local, agent-box-tailscale.yml]
-      args:
-        chdir: "{{ private_dotfiles_source }}/dot_local/share/chezmoi-ansible"
-      when: configure_tailscale | bool
-
-    - name: Pause for interactive Tailscale enrollment
-      ansible.builtin.pause:
-        prompt: >-
-          In a second SSH terminal, run `sudo tailscale up --hostname={{ tailscale_hostname }}`
-          and complete browser authentication. Press Enter only after `tailscale status`
-          shows this VM in the tailnet.
-      when: configure_tailscale | bool
 
     - name: Publish loopback-only Agent services through Tailscale Serve
       become: true

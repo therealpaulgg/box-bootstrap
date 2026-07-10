@@ -48,10 +48,13 @@ The bootstrap verifies that `agent` is not in `sudo`, `admin`, or `wheel`.
 - The full private dotfiles repository, including its vendor GlobalProtect
   archive if you later opt in to client installation.
 - Permission to enroll the host in the intended Tailscale tailnet.
+- One cloud-provided **initial access** path (for example Azure serial console,
+  Azure Bastion, or temporary SSH). Tailscale is configured by this bootstrap,
+  so it cannot be the mechanism that starts the first interactive session.
 
 ## Run on a fresh VM
 
-SSH as `azureuser`, then:
+Use the cloud's initial access path as `azureuser`, then:
 
 ```sh
 sudo apt update
@@ -93,7 +96,9 @@ The final durable secret mechanism is BWS, not Bitwarden CLI login state.
 
 ### Tailscale checkpoint
 
-When paused, use a second terminal:
+Tailscale is installed and its daemon is started in the bootstrap's first
+phase, before any private source or profile configuration. When paused, use a
+second initial-access terminal:
 
 ```sh
 sudo tailscale up --hostname=agent-box
