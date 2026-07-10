@@ -487,6 +487,8 @@
           - -c
           - local
           - workstation.yml
+          - -e
+          - install_agent_auth_gateway=false
       args:
         chdir: "{{ private_dotfiles_source }}/dot_local/share/chezmoi-ansible"
       environment:
