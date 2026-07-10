@@ -51,6 +51,7 @@
       become: true
       ansible.builtin.apt:
         name:
+          - acl
           - ansible
           - ca-certificates
           - curl
