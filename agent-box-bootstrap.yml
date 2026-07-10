@@ -1,0 +1,407 @@
+---
+# Public, one-time bootstrap for the dedicated Azure Agent Box topology:
+#   azureuser: trusted sudo-capable work administrator
+#   agent:     non-sudo coding runtime
+#
+# This repository deliberately contains no configuration secrets. It retrieves
+# the private dotfiles source with a short-lived BWS-backed Git credential, then
+# delegates all durable configuration to that private source.
+- name: Bootstrap a dual-user Agent Box from private dotfiles
+  hosts: localhost
+  connection: local
+  gather_facts: true
+
+  vars:
+    bootstrap_admin_user: azureuser
+    bootstrap_admin_home: "/home/{{ bootstrap_admin_user }}"
+    agent_user: agent
+    agent_home: "/home/{{ agent_user }}"
+    private_dotfiles_repo: https://github.com/therealpaulgg/dotfiles.git
+    private_dotfiles_source: "{{ bootstrap_admin_home }}/.local/share/chezmoi"
+    agent_dotfiles_source: "{{ agent_home }}/.local/share/chezmoi"
+    install_globalprotect: false
+    configure_tailscale: true
+    tailscale_hostname: agent-box
+
+  vars_prompt:
+    - name: github_token_secret_key
+      prompt: BWS secret key containing the short-lived GitHub clone token
+      private: false
+
+    - name: azure_bws_access_token
+      prompt: BWS_ACCESS_TOKEN for azureuser
+      private: true
+      confirm: true
+
+    - name: agent_bws_access_token
+      prompt: BWS_ACCESS_TOKEN for agent
+      private: true
+      confirm: true
+
+    - name: work_mcp_gateway_item
+      prompt: Bitwarden item name containing work MCP gateway fields
+      private: false
+
+  pre_tasks:
+    - name: Require a Debian-family Linux host
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.system == 'Linux'
+          - ansible_facts.os_family == 'Debian'
+          - ansible_facts.user_id == bootstrap_admin_user
+          - ansible_env.HOME == bootstrap_admin_home
+        fail_msg: >-
+          Run this only as {{ bootstrap_admin_user }} on a clean Debian-family
+          Agent Box. It intentionally does not support the normal workstation flow.
+
+    - name: Require sudo access and create the sudo timestamp for delegated playbooks
+      become: true
+      ansible.builtin.command: /usr/bin/true
+      changed_when: false
+
+    - name: Install public bootstrap dependencies
+      become: true
+      ansible.builtin.apt:
+        name:
+          - ansible
+          - ca-certificates
+          - curl
+          - git
+          - jq
+          - unzip
+          - chezmoi
+        state: present
+        update_cache: true
+
+    - name: Install the Ansible collections used by private provisioning
+      ansible.builtin.command:
+        argv:
+          - ansible-galaxy
+          - collection
+          - install
+          - -r
+          - "{{ playbook_dir }}/requirements.yml"
+      changed_when: false
+
+    - name: Install the Bitwarden Secrets Manager CLI for source bootstrap
+      become: true
+      ansible.builtin.shell: curl -fsSL https://bws.bitwarden.com/install | sh
+      args:
+        creates: /usr/local/bin/bws
+        executable: /bin/bash
+
+    - name: Create azureuser BWS token directory
+      ansible.builtin.file:
+        path: "{{ bootstrap_admin_home }}/.config/bws"
+        state: directory
+        mode: '0700'
+
+    - name: Persist azureuser BWS token with restrictive permissions
+      ansible.builtin.copy:
+        dest: "{{ bootstrap_admin_home }}/.config/bws/access-token"
+        content: "{{ azure_bws_access_token }}"
+        mode: '0600'
+      no_log: true
+
+    - name: Create a temporary directory for the one-time Git credential helper
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: agent-box-bootstrap-
+      register: bootstrap_tempdir
+      no_log: true
+
+    - name: Install the temporary Git askpass helper
+      ansible.builtin.template:
+        src: git-askpass.sh.j2
+        dest: "{{ bootstrap_tempdir.path }}/git-askpass"
+        mode: '0700'
+      no_log: true
+
+  tasks:
+    - name: Clone or refresh the private dotfiles source with a BWS-backed credential
+      ansible.builtin.shell: |
+        set -euo pipefail
+        trap 'rm -f "$GIT_ASKPASS_HELPER"' EXIT
+
+        projects="$(bws project list --output json)"
+        project_count="$(jq 'length' <<<"$projects")"
+        if [[ "$project_count" != "1" ]]; then
+          printf 'BWS_PROJECT_ID is required: this token can access %s projects.\n' "$project_count" >&2
+          exit 1
+        fi
+
+        project_id="$(jq -r '.[0].id' <<<"$projects")"
+        github_token="$(bws secret list "$project_id" --output json | jq -er --arg key "$GITHUB_TOKEN_SECRET_KEY" '.[] | select(.key == $key) | .value')"
+        export GITHUB_TOKEN="$github_token"
+        export GIT_ASKPASS="$GIT_ASKPASS_HELPER"
+        export GIT_TERMINAL_PROMPT=0
+
+        if [[ -e "$DOTFILES_SOURCE" && ! -d "$DOTFILES_SOURCE/.git" ]]; then
+          printf '%s exists but is not a Git checkout. Refusing to replace it.\n' "$DOTFILES_SOURCE" >&2
+          exit 1
+        fi
+
+        if [[ -d "$DOTFILES_SOURCE/.git" ]]; then
+          git -C "$DOTFILES_SOURCE" remote set-url origin "$DOTFILES_REPO"
+          git -C "$DOTFILES_SOURCE" fetch --depth=1 origin main
+          git -C "$DOTFILES_SOURCE" reset --hard origin/main
+        else
+          install -d -m 0755 "$(dirname "$DOTFILES_SOURCE")"
+          git clone --depth=1 "$DOTFILES_REPO" "$DOTFILES_SOURCE"
+        fi
+
+        unset github_token GITHUB_TOKEN GIT_ASKPASS GIT_TERMINAL_PROMPT
+      args:
+        executable: /bin/bash
+      environment:
+        BWS_ACCESS_TOKEN: "{{ azure_bws_access_token }}"
+        GITHUB_TOKEN_SECRET_KEY: "{{ github_token_secret_key }}"
+        GIT_ASKPASS_HELPER: "{{ bootstrap_tempdir.path }}/git-askpass"
+        DOTFILES_REPO: "{{ private_dotfiles_repo }}"
+        DOTFILES_SOURCE: "{{ private_dotfiles_source }}"
+      no_log: true
+
+    - name: Remove the temporary Git askpass helper
+      ansible.builtin.file:
+        path: "{{ bootstrap_tempdir.path }}"
+        state: absent
+      no_log: true
+
+    - name: Provision host dependencies and create the agent account
+      become: true
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - -i
+          - localhost,
+          - -c
+          - local
+          - agent-box-system.yml
+          - -e
+          - "install_globalprotect={{ install_globalprotect | bool | lower }}"
+      args:
+        chdir: "{{ private_dotfiles_source }}/dot_local/share/chezmoi-ansible"
+
+    - name: Create agent BWS token directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ agent_home }}/.config/bws"
+        state: directory
+        owner: "{{ agent_user }}"
+        group: "{{ agent_user }}"
+        mode: '0700'
+
+    - name: Persist agent BWS token with restrictive permissions
+      become: true
+      ansible.builtin.copy:
+        dest: "{{ agent_home }}/.config/bws/access-token"
+        content: "{{ agent_bws_access_token }}"
+        owner: "{{ agent_user }}"
+        group: "{{ agent_user }}"
+        mode: '0600'
+      no_log: true
+
+    - name: Pause for Bitwarden login and unlock
+      ansible.builtin.pause:
+        prompt: >-
+          In a second SSH terminal as {{ bootstrap_admin_user }}, run `bw login`
+          (if necessary) and `bw unlock --raw`. Leave this playbook running, then
+          press Enter here to supply that session token privately.
+
+    - name: Capture the short-lived Bitwarden session token
+      ansible.builtin.pause:
+        prompt: Paste the BW_SESSION token
+        echo: false
+      register: bootstrap_bitwarden_session
+      no_log: true
+
+    - name: Initialize the administrator work profile
+      ansible.builtin.command:
+        argv:
+          - chezmoi
+          - init
+          - --source
+          - "{{ private_dotfiles_source }}"
+          - --promptChoice
+          - Choose configuration profile=work
+          - --promptString
+          - "Bitwarden item name containing the work MCP gateway fields={{ work_mcp_gateway_item }}"
+      args:
+        creates: "{{ bootstrap_admin_home }}/.config/chezmoi/chezmoi.toml"
+      environment:
+        BW_SESSION: "{{ bootstrap_bitwarden_session.user_input }}"
+      no_log: true
+
+    - name: Apply the administrator work profile
+      ansible.builtin.command:
+        argv: [chezmoi, apply, --force]
+      environment:
+        BW_SESSION: "{{ bootstrap_bitwarden_session.user_input }}"
+      no_log: true
+
+    - name: Copy the private source to the agent-owned Chezmoi source directory
+      become: true
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf "$AGENT_SOURCE"
+        install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0755 "$(dirname "$AGENT_SOURCE")"
+        cp -a "$ADMIN_SOURCE" "$AGENT_SOURCE"
+        chown -R "$AGENT_USER:$AGENT_USER" "$AGENT_SOURCE"
+      args:
+        executable: /bin/bash
+      environment:
+        AGENT_SOURCE: "{{ agent_dotfiles_source }}"
+        AGENT_USER: "{{ agent_user }}"
+        ADMIN_SOURCE: "{{ private_dotfiles_source }}"
+
+    - name: Initialize the unprivileged agent profile
+      become: true
+      become_user: "{{ agent_user }}"
+      ansible.builtin.command:
+        argv:
+          - chezmoi
+          - init
+          - --source
+          - "{{ agent_dotfiles_source }}"
+          - --promptChoice
+          - Choose configuration profile=agent
+          - --promptString
+          - "Bitwarden item name containing the work MCP gateway fields={{ work_mcp_gateway_item }}"
+      args:
+        creates: "{{ agent_home }}/.config/chezmoi/chezmoi.toml"
+      environment:
+        HOME: "{{ agent_home }}"
+        BW_SESSION: "{{ bootstrap_bitwarden_session.user_input }}"
+      no_log: true
+
+    - name: Apply the unprivileged agent profile
+      become: true
+      become_user: "{{ agent_user }}"
+      ansible.builtin.command:
+        argv: [chezmoi, apply, --force]
+      environment:
+        HOME: "{{ agent_home }}"
+        BW_SESSION: "{{ bootstrap_bitwarden_session.user_input }}"
+      no_log: true
+
+    - name: Provision the administrator work environment
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - -i
+          - localhost,
+          - -c
+          - local
+          - workstation.yml
+      args:
+        chdir: "{{ private_dotfiles_source }}/dot_local/share/chezmoi-ansible"
+      environment:
+        DOTFILES_PROFILE: work
+
+    - name: Provision the agent coding environment
+      become: true
+      become_user: "{{ agent_user }}"
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - -i
+          - localhost,
+          - -c
+          - local
+          - agent-box-agent.yml
+      args:
+        chdir: "{{ agent_dotfiles_source }}/dot_local/share/chezmoi-ansible"
+      environment:
+        HOME: "{{ agent_home }}"
+
+    - name: Start the host-managed Agent browser runtime
+      become: true
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - -i
+          - localhost,
+          - -c
+          - local
+          - agent-box-system.yml
+          - -e
+          - "install_globalprotect={{ install_globalprotect | bool | lower }}"
+          - -e
+          - start_agent_runtime=true
+      args:
+        chdir: "{{ private_dotfiles_source }}/dot_local/share/chezmoi-ansible"
+
+    - name: Install and start Tailscale
+      become: true
+      ansible.builtin.command:
+        argv: [ansible-playbook, -i, 'localhost,', -c, local, agent-box-tailscale.yml]
+      args:
+        chdir: "{{ private_dotfiles_source }}/dot_local/share/chezmoi-ansible"
+      when: configure_tailscale | bool
+
+    - name: Pause for interactive Tailscale enrollment
+      ansible.builtin.pause:
+        prompt: >-
+          In a second SSH terminal, run `sudo tailscale up --hostname={{ tailscale_hostname }}`
+          and complete browser authentication. Press Enter only after `tailscale status`
+          shows this VM in the tailnet.
+      when: configure_tailscale | bool
+
+    - name: Publish loopback-only Agent services through Tailscale Serve
+      become: true
+      ansible.builtin.command:
+        argv: [ansible-playbook, -i, 'localhost,', -c, local, agent-box-tailscale-serve.yml]
+      args:
+        chdir: "{{ private_dotfiles_source }}/dot_local/share/chezmoi-ansible"
+      when: configure_tailscale | bool
+
+    - name: Verify the non-sudo account boundary
+      ansible.builtin.command:
+        argv: [id, -nG, "{{ agent_user }}"]
+      register: bootstrap_agent_groups
+      changed_when: false
+
+    - name: Require the agent to remain unprivileged
+      ansible.builtin.assert:
+        that: "(bootstrap_agent_groups.stdout.split() | intersect(['sudo', 'admin', 'wheel'])) | length == 0"
+        fail_msg: "{{ agent_user }} was granted a privileged group unexpectedly."
+
+    - name: Verify Agent Box services and toolchain
+      become: true
+      become_user: "{{ agent_user }}"
+      ansible.builtin.command: "{{ item }}"
+      environment:
+        HOME: "{{ agent_home }}"
+        PATH: "{{ agent_home }}/.local/bin:{{ agent_home }}/.bun/bin:{{ ansible_env.PATH }}"
+      changed_when: false
+      loop:
+        - pi --version
+        - claude --version
+        - codex --version
+        - opencode --version
+        - agent-browser --version
+        - bws --version
+        - systemctl --user is-active agent-auth-gateway.service
+        - systemctl --user is-active agent-chrome-mcp.service
+
+    - name: Verify local browser endpoints
+      ansible.builtin.uri:
+        url: "{{ item }}"
+        status_code: 200
+      loop:
+        - http://127.0.0.1:9222/json/version
+        - http://127.0.0.1:6080/vnc.html
+
+  post_tasks:
+    - name: Clear the in-memory Bitwarden session token
+      ansible.builtin.set_fact:
+        bootstrap_bitwarden_session: {}
+      no_log: true
+
+    - name: Report the completed topology
+      ansible.builtin.debug:
+        msg:
+          - "{{ bootstrap_admin_user }} received the work profile and remains the trusted sudo administrator."
+          - "{{ agent_user }} received the headless agent profile and remains non-sudo."
+          - "GlobalProtect installation was {{ 'enabled' if install_globalprotect | bool else 'skipped' }}; initial SAML login is intentionally not automated."
+          - "Do not reuse the Bitwarden session token or any temporary clone credential."
