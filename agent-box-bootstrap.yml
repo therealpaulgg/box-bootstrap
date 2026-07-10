@@ -22,6 +22,7 @@
     install_globalprotect: false
     configure_tailscale: true
     tailscale_hostname: agent-box
+    chezmoi_version: v2.71.0
 
   vars_prompt:
     - name: github_bws_project_id
@@ -74,9 +75,16 @@
           - git
           - jq
           - unzip
-          - chezmoi
         state: present
         update_cache: true
+
+    - name: Install the pinned Chezmoi release
+      become: true
+      ansible.builtin.shell: >-
+        sh -c "$(curl -fsLS get.chezmoi.io)" -- -b /usr/local/bin -v {{ chezmoi_version }}
+      args:
+        creates: /usr/local/bin/chezmoi
+        executable: /bin/bash
 
     - name: Install the Ansible collections used by private provisioning
       ansible.builtin.command:

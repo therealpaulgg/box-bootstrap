@@ -23,8 +23,8 @@ The bootstrap verifies that `agent` is not in `sudo`, `admin`, or `wheel`.
 
 ## What the bootstrap automates
 
-1. Installs Chezmoi, BWS CLI, Git, Ansible prerequisites, and the required
-   Ansible collection.
+1. Installs pinned Chezmoi, BWS CLI, Git, Ansible prerequisites, and the
+   required Ansible collection.
 2. Prompts privately for **separate** BWS access tokens for `azureuser` and
    `agent`, then stores each token only in that account's `0600` local file.
 3. Uses the `azureuser` BWS token to read a caller-selected GitHub token secret
