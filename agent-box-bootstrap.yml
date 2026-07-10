@@ -254,12 +254,25 @@
         AGENT_USER: "{{ agent_user }}"
         ADMIN_SOURCE: "{{ private_dotfiles_source }}"
 
-    - name: Initialize the unprivileged agent profile
+    # Render the agent profile through azureuser's already-unlocked Bitwarden
+    # CLI. The agent never receives a Bitwarden login database or session token.
+    - name: Create a temporary writable Chezmoi config directory for agent rendering
       become: true
-      become_user: "{{ agent_user }}"
+      ansible.builtin.file:
+        path: "{{ agent_home }}/.config/chezmoi"
+        state: directory
+        owner: "{{ bootstrap_admin_user }}"
+        group: "{{ bootstrap_admin_user }}"
+        mode: '0700'
+
+    - name: Initialize the unprivileged agent profile without copying Bitwarden state
       ansible.builtin.command:
         argv:
           - chezmoi
+          - --config
+          - "{{ agent_home }}/.config/chezmoi/chezmoi.toml"
+          - --destination
+          - "{{ agent_home }}"
           - init
           - --source
           - "{{ agent_dotfiles_source }}"
@@ -270,19 +283,31 @@
       args:
         creates: "{{ agent_home }}/.config/chezmoi/chezmoi.toml"
       environment:
-        HOME: "{{ agent_home }}"
         BW_SESSION: "{{ bootstrap_bitwarden_session.user_input }}"
       no_log: true
 
-    - name: Apply the unprivileged agent profile
-      become: true
-      become_user: "{{ agent_user }}"
+    - name: Apply the unprivileged agent profile without copying Bitwarden state
       ansible.builtin.command:
-        argv: [chezmoi, apply, --force]
+        argv:
+          - chezmoi
+          - --config
+          - "{{ agent_home }}/.config/chezmoi/chezmoi.toml"
+          - --destination
+          - "{{ agent_home }}"
+          - apply
+          - --force
       environment:
-        HOME: "{{ agent_home }}"
         BW_SESSION: "{{ bootstrap_bitwarden_session.user_input }}"
       no_log: true
+
+    - name: Give the agent ownership of its freshly rendered home directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ agent_home }}"
+        state: directory
+        owner: "{{ agent_user }}"
+        group: "{{ agent_user }}"
+        recurse: true
 
     - name: Provision the administrator work environment
       ansible.builtin.command:

@@ -84,8 +84,10 @@ bw unlock --raw
 
 Paste the resulting `BW_SESSION` only into the bootstrap's hidden prompt. It
 is used only to render the two Chezmoi work-derived profiles and is never
-written to disk by this bootstrap. The final durable secret mechanism is BWS,
-not Bitwarden CLI login state on `agent`.
+written to disk by this bootstrap. The `agent` profile is rendered through
+`azureuser`'s unlocked CLI into the agent destination, so no Bitwarden login
+database, browser state, or session token is copied into the agent account.
+The final durable secret mechanism is BWS, not Bitwarden CLI login state.
 
 ### Tailscale checkpoint
 
