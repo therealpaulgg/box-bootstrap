@@ -65,6 +65,8 @@ ansible-playbook -i localhost, -c local agent-box-bootstrap.yml --ask-become-pas
 
 The playbook asks for:
 
+- the BWS project ID holding the GitHub clone token when the token can access
+  multiple projects (otherwise leave it blank);
 - the BWS secret key holding the GitHub clone token;
 - a BWS access token for `azureuser`;
 - a separate BWS access token for `agent`;
