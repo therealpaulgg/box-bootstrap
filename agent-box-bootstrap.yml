@@ -23,30 +23,12 @@
     configure_tailscale: true
     tailscale_hostname: agent-box
     chezmoi_version: v2.71.0
-
-  vars_prompt:
-    - name: github_bws_project_id
-      prompt: BWS project ID containing the GitHub clone credential (leave blank when this token has one project)
-      private: false
-      default: ''
-
-    - name: github_token_secret_key
-      prompt: BWS secret key containing the short-lived GitHub clone token
-      private: false
-
-    - name: azure_bws_access_token
-      prompt: BWS_ACCESS_TOKEN for azureuser
-      private: true
-      confirm: true
-
-    - name: agent_bws_access_token
-      prompt: BWS_ACCESS_TOKEN for agent
-      private: true
-      confirm: true
-
-    - name: work_mcp_gateway_item
-      prompt: Bitwarden item name containing work MCP gateway fields
-      private: false
+    bootstrap_state_path: "{{ bootstrap_admin_home }}/.config/box-bootstrap/state.yml"
+    github_bws_project_id: ''
+    github_token_secret_key: ''
+    work_mcp_gateway_item: ''
+    azure_bws_access_token: ''
+    agent_bws_access_token: ''
 
   pre_tasks:
     - name: Require a Debian-family Linux host
@@ -132,6 +114,39 @@
       changed_when: false
       when: configure_tailscale | bool
 
+    - name: Detect an existing azureuser BWS token
+      ansible.builtin.stat:
+        path: "{{ bootstrap_admin_home }}/.config/bws/access-token"
+      register: azure_bws_token_file
+      no_log: true
+
+    - name: Read the existing azureuser BWS token
+      ansible.builtin.slurp:
+        src: "{{ bootstrap_admin_home }}/.config/bws/access-token"
+      register: azure_bws_token_contents
+      when: azure_bws_token_file.stat.exists
+      no_log: true
+
+    - name: Use the existing azureuser BWS token
+      ansible.builtin.set_fact:
+        azure_bws_access_token: "{{ azure_bws_token_contents.content | b64decode | trim }}"
+      when: azure_bws_token_file.stat.exists
+      no_log: true
+
+    - name: Prompt for the initial azureuser BWS token
+      ansible.builtin.pause:
+        prompt: BWS_ACCESS_TOKEN for azureuser
+        echo: false
+      register: azure_bws_token_prompt
+      when: not azure_bws_token_file.stat.exists
+      no_log: true
+
+    - name: Capture the initial azureuser BWS token
+      ansible.builtin.set_fact:
+        azure_bws_access_token: "{{ azure_bws_token_prompt.user_input }}"
+      when: not azure_bws_token_file.stat.exists
+      no_log: true
+
     - name: Create azureuser BWS token directory
       ansible.builtin.file:
         path: "{{ bootstrap_admin_home }}/.config/bws"
@@ -144,6 +159,57 @@
         content: "{{ azure_bws_access_token }}"
         mode: '0600'
       no_log: true
+
+    - name: Load persisted non-secret bootstrap choices
+      ansible.builtin.include_vars:
+        file: "{{ bootstrap_state_path }}"
+        name: persisted_bootstrap
+      failed_when: false
+      no_log: true
+
+    - name: Reuse persisted non-secret bootstrap choices
+      ansible.builtin.set_fact:
+        github_bws_project_id: "{{ persisted_bootstrap.github_bws_project_id | default(github_bws_project_id) }}"
+        github_token_secret_key: "{{ persisted_bootstrap.github_token_secret_key | default(github_token_secret_key) }}"
+        work_mcp_gateway_item: "{{ persisted_bootstrap.work_mcp_gateway_item | default(work_mcp_gateway_item) }}"
+      no_log: true
+
+    - name: Prompt for the GitHub clone secret key on the initial run
+      ansible.builtin.pause:
+        prompt: BWS secret key containing the short-lived GitHub clone token
+      register: github_token_secret_key_prompt
+      when: github_token_secret_key | length == 0
+
+    - name: Capture the GitHub clone secret key
+      ansible.builtin.set_fact:
+        github_token_secret_key: "{{ github_token_secret_key_prompt.user_input }}"
+      when: github_token_secret_key | length == 0
+
+    - name: Prompt for the Bitwarden gateway item on the initial run
+      ansible.builtin.pause:
+        prompt: Bitwarden item name containing work MCP gateway fields
+      register: work_mcp_gateway_item_prompt
+      when: work_mcp_gateway_item | length == 0
+
+    - name: Capture the Bitwarden gateway item name
+      ansible.builtin.set_fact:
+        work_mcp_gateway_item: "{{ work_mcp_gateway_item_prompt.user_input }}"
+      when: work_mcp_gateway_item | length == 0
+
+    - name: Create the local bootstrap state directory
+      ansible.builtin.file:
+        path: "{{ bootstrap_state_path | dirname }}"
+        state: directory
+        mode: '0700'
+
+    - name: Persist non-secret bootstrap choices for resume
+      ansible.builtin.copy:
+        dest: "{{ bootstrap_state_path }}"
+        content: |
+          github_bws_project_id: {{ github_bws_project_id | to_json }}
+          github_token_secret_key: {{ github_token_secret_key | to_json }}
+          work_mcp_gateway_item: {{ work_mcp_gateway_item | to_json }}
+        mode: '0600'
 
     - name: Create a temporary directory for the one-time Git credential helper
       ansible.builtin.tempfile:
@@ -227,6 +293,41 @@
           - "install_globalprotect={{ install_globalprotect | bool | lower }}"
       args:
         chdir: "{{ private_dotfiles_source }}/dot_local/share/chezmoi-ansible"
+
+    - name: Detect an existing agent BWS token
+      become: true
+      ansible.builtin.stat:
+        path: "{{ agent_home }}/.config/bws/access-token"
+      register: agent_bws_token_file
+      no_log: true
+
+    - name: Read the existing agent BWS token
+      become: true
+      ansible.builtin.slurp:
+        src: "{{ agent_home }}/.config/bws/access-token"
+      register: agent_bws_token_contents
+      when: agent_bws_token_file.stat.exists
+      no_log: true
+
+    - name: Use the existing agent BWS token
+      ansible.builtin.set_fact:
+        agent_bws_access_token: "{{ agent_bws_token_contents.content | b64decode | trim }}"
+      when: agent_bws_token_file.stat.exists
+      no_log: true
+
+    - name: Prompt for the initial agent BWS token
+      ansible.builtin.pause:
+        prompt: BWS_ACCESS_TOKEN for agent
+        echo: false
+      register: agent_bws_token_prompt
+      when: not agent_bws_token_file.stat.exists
+      no_log: true
+
+    - name: Capture the initial agent BWS token
+      ansible.builtin.set_fact:
+        agent_bws_access_token: "{{ agent_bws_token_prompt.user_input }}"
+      when: not agent_bws_token_file.stat.exists
+      no_log: true
 
     - name: Create agent BWS token directory
       become: true
