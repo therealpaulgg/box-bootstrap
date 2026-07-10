@@ -302,16 +302,17 @@
 
     # Render the agent profile through azureuser's already-unlocked Bitwarden
     # CLI. The agent never receives a Bitwarden login database or session token.
-    - name: Create a temporary writable Chezmoi config directory for agent rendering
+    - name: Create a root-writable Chezmoi config directory for agent rendering
       become: true
       ansible.builtin.file:
         path: "{{ agent_home }}/.config/chezmoi"
         state: directory
-        owner: "{{ bootstrap_admin_user }}"
-        group: "{{ bootstrap_admin_user }}"
+        owner: root
+        group: root
         mode: '0700'
 
     - name: Initialize the unprivileged agent profile without copying Bitwarden state
+      become: true
       ansible.builtin.command:
         argv:
           - chezmoi
@@ -329,10 +330,12 @@
       args:
         creates: "{{ agent_home }}/.config/chezmoi/chezmoi.toml"
       environment:
+        BITWARDENCLI_APPDATA_DIR: "{{ bootstrap_admin_home }}/.config/Bitwarden CLI"
         BW_SESSION: "{{ bootstrap_bitwarden_session.user_input }}"
       no_log: true
 
     - name: Apply the unprivileged agent profile without copying Bitwarden state
+      become: true
       ansible.builtin.command:
         argv:
           - chezmoi
@@ -343,6 +346,7 @@
           - apply
           - --force
       environment:
+        BITWARDENCLI_APPDATA_DIR: "{{ bootstrap_admin_home }}/.config/Bitwarden CLI"
         BW_SESSION: "{{ bootstrap_bitwarden_session.user_input }}"
       no_log: true
 
